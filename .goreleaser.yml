@@ -5,8 +5,12 @@ before:
 builds:
 - env:
   - CGO_ENABLED=0
-- goarch:
+  goarch:
   - amd64
+  goos:
+  - linux
+  - darwin
+  - windows
 archives:
 - replacements:
     darwin: MacOS
