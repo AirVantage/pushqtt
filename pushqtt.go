@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -26,7 +27,7 @@ var (
 	message    = flag.String("m", `{"threadId":"%d"}`, "Message in JSON")
 	timeout    = flag.Duration("w", 15*time.Second, "Wait timeout on connect and publish")
 	verbose    = flag.Bool("v", false, "Print paho warning messages")
-	metrics    = flag.Bool("e", false, "Export metrics (expvar)")
+	expAddr    = flag.String("e", "", "expvar listening address (e.g. :8080)")
 
 	// Metrics
 	connectedDevices = new(expvar.Int)
@@ -126,9 +127,12 @@ func main() {
 	}
 
 	// Metrics
-	expvar.Publish("connected-devices", connectedDevices)
-	expvar.Publish("published", expvar.Func(publishRate))
-	expvar.Publish("errors", expvar.Func(errorRate))
+	if *expAddr != "" {
+		expvar.Publish("connected-devices", connectedDevices)
+		expvar.Publish("published", expvar.Func(publishRate))
+		expvar.Publish("errors", expvar.Func(errorRate))
+		http.ListenAndServe(*expAddr, nil)
+	}
 
 	// Listen for errors
 	client := buildClient()
