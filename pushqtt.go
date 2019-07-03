@@ -57,7 +57,7 @@ func errorHandler(c mqtt.Client, m mqtt.Message) {
 	log.Printf("msgid:%d %s\n", m.MessageID(), string(m.Payload()))
 }
 
-func buildClient() mqtt.Client {
+func buildClient(id uint) mqtt.Client {
 	proto := "tcp://"
 	if strings.HasSuffix(*host, ":8883") {
 		proto = "ssl://"
@@ -81,6 +81,11 @@ func buildClient() mqtt.Client {
 		errorInc("connection timeout")
 	} else if err := token.Error(); err != nil {
 		errorInc(err.Error())
+	} else {
+		connectedDevices.Add(1)
+		if *verbose {
+			log.Printf("device %d connected\n", id)
+		}
 	}
 
 	return client
@@ -89,17 +94,13 @@ func buildClient() mqtt.Client {
 func publish(wg *sync.WaitGroup, stop *bool, id uint) {
 	defer wg.Done()
 
-	client := buildClient()
+	client := buildClient(id)
 	msg := fmt.Sprintf(*message, id)
 
 	for *stop == false {
 		for !client.IsConnected() && !*stop {
 			connectedDevices.Add(-1)
-			client = buildClient()
-		}
-		connectedDevices.Add(1)
-		if *verbose {
-			log.Printf("device %d connected", id)
+			client = buildClient(id)
 		}
 		token := client.Publish(*topic, byte(*qos), false, msg)
 		if !token.WaitTimeout(*timeout) {
@@ -135,7 +136,7 @@ func main() {
 	}
 
 	// Listen for errors
-	client := buildClient()
+	client := buildClient(0)
 	token := client.Subscribe("errors", 0, errorHandler)
 	token.Wait()
 	if err := token.Error(); err != nil {
