@@ -1,6 +1,7 @@
 package main
 
 import (
+	"expvar"
 	"flag"
 	"fmt"
 	"log"
@@ -25,34 +26,29 @@ var (
 	message    = flag.String("m", `{"threadId":"%d"}`, "Message in JSON")
 	timeout    = flag.Duration("w", 15*time.Second, "Wait timeout on connect and publish")
 	verbose    = flag.Bool("v", false, "Print paho warning messages")
-	repFreq    = flag.Duration("r", 1*time.Minute, "Reports display frequency")
+	metrics    = flag.Bool("e", false, "Export metrics (expvar)")
 
-	errors = ErrorMap{errors: make(map[string]int)}
+	// Metrics
+	connectedDevices = new(expvar.Int)
+	published        = new(expvar.Int) // rate
+	errors           = new(expvar.Map) // rate
 )
 
-// ErrorMap is a thread-safe map to count errors by type.
-type ErrorMap struct {
-	sync.Mutex
-	errors map[string]int
+func publishRate() interface{} {
+	defer published.Set(0)
+	return published.Value()
 }
 
-func (e *ErrorMap) inc(err string) {
-	e.Lock()
-	e.errors[err]++
-	e.Unlock()
+func errorRate() interface{} {
+	defer errors.Init()
+	return errors.String()
 }
 
-// Print and reset the ErrorMap
-func (e *ErrorMap) dump() {
-	e.Lock()
-	if len(e.errors) > 0 {
-		log.Print("Errors:")
-		for k, v := range e.errors {
-			log.Printf("%s: %d\n", k, v)
-			delete(e.errors, k)
-		}
+func errorInc(err string) {
+	if *verbose {
+		log.Print(err)
 	}
-	e.Unlock()
+	errors.Add(err, 1)
 }
 
 // Print messages from the "errors" channel
@@ -81,9 +77,9 @@ func buildClient() mqtt.Client {
 
 	token := client.Connect()
 	if !token.WaitTimeout(*timeout) {
-		errors.inc("connection timeout")
+		errorInc("connection timeout")
 	} else if err := token.Error(); err != nil {
-		errors.inc(err.Error())
+		errorInc(err.Error())
 	}
 
 	return client
@@ -97,20 +93,23 @@ func publish(wg *sync.WaitGroup, stop *bool, id uint) {
 
 	for *stop == false {
 		for !client.IsConnected() && !*stop {
+			connectedDevices.Add(-1)
 			client = buildClient()
 		}
+		connectedDevices.Add(1)
 		if *verbose {
 			log.Printf("device %d connected", id)
 		}
 		token := client.Publish(*topic, byte(*qos), false, msg)
 		if !token.WaitTimeout(*timeout) {
-			errors.inc("publish timeout")
+			errorInc("publish timeout")
 			client.Disconnect(0)
 		}
 		if token.Error() != nil {
-			errors.inc(token.Error().Error())
+			errorInc(token.Error().Error())
 			client.Disconnect(0)
 		}
+		published.Add(1)
 		time.Sleep(*frequency)
 	}
 }
@@ -125,6 +124,11 @@ func main() {
 	if *verbose {
 		mqtt.WARN = tracer
 	}
+
+	// Metrics
+	expvar.Publish("connected-devices", connectedDevices)
+	expvar.Publish("published", expvar.Func(publishRate))
+	expvar.Publish("errors", expvar.Func(errorRate))
 
 	// Listen for errors
 	client := buildClient()
@@ -154,18 +158,7 @@ func main() {
 		println("")
 	}()
 
-	// Print an error report regularly
-	go func() {
-		for {
-			time.Sleep(*repFreq)
-			errors.dump()
-		}
-	}()
-
 	// Wait for all devices to be stopped
 	wg.Wait()
 	client.Unsubscribe("errors").WaitTimeout(*timeout)
-
-	// Last error report
-	errors.dump()
 }
