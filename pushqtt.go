@@ -31,7 +31,7 @@ var (
 	expAddr    = flag.String("e", "", "expvar listening address (e.g. :8080)")
 
 	// Metrics
-	connectedDevices     = new(expvar.Int)
+	devicesStatus        = make(map[uint]bool) // map of devices id, connected or not
 	published            = ratecounter.NewRateCounter(time.Minute)
 	cnxErrors            = ratecounter.NewRateCounter(time.Minute)
 	cnxTimeoutErrors     = ratecounter.NewRateCounter(time.Minute)
@@ -41,6 +41,17 @@ var (
 	// MQTT config
 	opt = mqtt.NewClientOptions()
 )
+
+// Called by expvar to get the number of connected devices.
+func countConnectedDevices() interface{} {
+	n := 0
+	for _, connected := range devicesStatus {
+		if connected {
+			n++
+		}
+	}
+	return n
+}
 
 // Print messages from the "errors" channel
 func errorHandler(c mqtt.Client, m mqtt.Message) {
@@ -63,7 +74,7 @@ func buildClient(id uint) mqtt.Client {
 		log.Printf("[dev %d] %s\n", id, err.Error())
 		cnxErrors.Incr(1)
 	} else {
-		connectedDevices.Add(1)
+		devicesStatus[id] = true
 		if *verbose {
 			log.Printf("device %d connected\n", id)
 		}
@@ -80,7 +91,7 @@ func publish(wg *sync.WaitGroup, stop *bool, id uint) {
 
 	for *stop == false {
 		for !client.IsConnected() && !*stop {
-			connectedDevices.Add(-1)
+			devicesStatus[id] = false
 			client = buildClient(id)
 		}
 		token := client.Publish(*topic, byte(*qos), false, msg)
@@ -114,7 +125,7 @@ func main() {
 
 	// Metrics
 	if *expAddr != "" {
-		expvar.Publish("connected-devices", connectedDevices)
+		expvar.Publish("connected-devices", expvar.Func(countConnectedDevices))
 		expvar.Publish("published", published)
 		expvar.Publish("errors-connection-timeout", cnxTimeoutErrors)
 		expvar.Publish("errors-connection-other", cnxErrors)
