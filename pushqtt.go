@@ -37,6 +37,9 @@ var (
 	cnxTimeoutErrors     = ratecounter.NewRateCounter(time.Minute)
 	publishErrors        = ratecounter.NewRateCounter(time.Minute)
 	publishTimeoutErrors = ratecounter.NewRateCounter(time.Minute)
+
+	// MQTT config
+	opt = mqtt.NewClientOptions()
 )
 
 // Print messages from the "errors" channel
@@ -45,17 +48,6 @@ func errorHandler(c mqtt.Client, m mqtt.Message) {
 }
 
 func buildClient(id uint) mqtt.Client {
-	proto := "tcp://"
-	if strings.HasSuffix(*host, ":8883") {
-		proto = "ssl://"
-	}
-
-	opt := mqtt.NewClientOptions().
-		AddBroker(proto + *host).
-		SetAutoReconnect(false).
-		SetDefaultPublishHandler(errorHandler).
-		SetUsername(*user).
-		SetPassword(*pass)
 	client := mqtt.NewClient(opt)
 
 	// Sleep some random time to prevent devices to connect all at the same time,
@@ -96,13 +88,13 @@ func publish(wg *sync.WaitGroup, stop *bool, id uint) {
 			log.Printf("[dev %d] publish timeout\n", id)
 			publishTimeoutErrors.Incr(1)
 			client.Disconnect(0)
-		}
-		if err := token.Error(); err != nil {
+		} else if err := token.Error(); err != nil {
 			log.Printf("[dev %d] %s\n", id, err.Error())
 			publishErrors.Incr(1)
 			client.Disconnect(0)
+		} else {
+			published.Incr(1)
 		}
-		published.Incr(1)
 		time.Sleep(*frequency)
 	}
 
@@ -130,6 +122,16 @@ func main() {
 		expvar.Publish("errors-publish-other", publishErrors)
 		go log.Fatal(http.ListenAndServe(*expAddr, nil))
 	}
+
+	// MQTT configuration
+	if strings.HasSuffix(*host, ":8883") {
+		opt.AddBroker("ssl://" + *host)
+	} else {
+		opt.AddBroker("tcp://" + *host)
+	}
+	opt.SetAutoReconnect(false).
+		SetDefaultPublishHandler(errorHandler).
+		SetUsername(*user).SetPassword(*pass)
 
 	// Listen for errors
 	client := buildClient(0)
