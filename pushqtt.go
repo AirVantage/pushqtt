@@ -14,6 +14,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/paulbellamy/ratecounter"
 )
 
 var (
@@ -30,27 +31,13 @@ var (
 	expAddr    = flag.String("e", "", "expvar listening address (e.g. :8080)")
 
 	// Metrics
-	connectedDevices = new(expvar.Int)
-	published        = new(expvar.Int) // rate
-	errors           = new(expvar.Map) // rate
+	connectedDevices     = new(expvar.Int)
+	published            = ratecounter.NewRateCounter(time.Minute)
+	cnxErrors            = ratecounter.NewRateCounter(time.Minute)
+	cnxTimeoutErrors     = ratecounter.NewRateCounter(time.Minute)
+	publishErrors        = ratecounter.NewRateCounter(time.Minute)
+	publishTimeoutErrors = ratecounter.NewRateCounter(time.Minute)
 )
-
-func publishRate() interface{} {
-	defer published.Set(0)
-	return published.Value()
-}
-
-func errorRate() interface{} {
-	defer errors.Init()
-	return errors.String()
-}
-
-func errorInc(err string) {
-	if *verbose {
-		log.Print(err)
-	}
-	errors.Add(err, 1)
-}
 
 // Print messages from the "errors" channel
 func errorHandler(c mqtt.Client, m mqtt.Message) {
@@ -78,9 +65,11 @@ func buildClient(id uint) mqtt.Client {
 
 	token := client.Connect()
 	if !token.WaitTimeout(*timeout) {
-		errorInc("connection timeout")
+		log.Printf("[dev %d] connection timeout\n", id)
+		cnxTimeoutErrors.Incr(1)
 	} else if err := token.Error(); err != nil {
-		errorInc(err.Error())
+		log.Printf("[dev %d] %s\n", id, err.Error())
+		cnxErrors.Incr(1)
 	} else {
 		connectedDevices.Add(1)
 		if *verbose {
@@ -104,16 +93,20 @@ func publish(wg *sync.WaitGroup, stop *bool, id uint) {
 		}
 		token := client.Publish(*topic, byte(*qos), false, msg)
 		if !token.WaitTimeout(*timeout) {
-			errorInc("publish timeout")
+			log.Printf("[dev %d] publish timeout\n", id)
+			publishTimeoutErrors.Incr(1)
 			client.Disconnect(0)
 		}
-		if token.Error() != nil {
-			errorInc(token.Error().Error())
+		if err := token.Error(); err != nil {
+			log.Printf("[dev %d] %s\n", id, err.Error())
+			publishErrors.Incr(1)
 			client.Disconnect(0)
 		}
-		published.Add(1)
+		published.Incr(1)
 		time.Sleep(*frequency)
 	}
+
+	client.Disconnect(0)
 }
 
 func main() {
@@ -130,17 +123,22 @@ func main() {
 	// Metrics
 	if *expAddr != "" {
 		expvar.Publish("connected-devices", connectedDevices)
-		expvar.Publish("published", expvar.Func(publishRate))
-		expvar.Publish("errors", expvar.Func(errorRate))
-		go http.ListenAndServe(*expAddr, nil)
+		expvar.Publish("published", published)
+		expvar.Publish("errors-connection-timeout", cnxTimeoutErrors)
+		expvar.Publish("errors-connection-other", cnxErrors)
+		expvar.Publish("errors-publish-timeout", publishTimeoutErrors)
+		expvar.Publish("errors-publish-other", publishErrors)
+		go log.Fatal(http.ListenAndServe(*expAddr, nil))
 	}
 
 	// Listen for errors
 	client := buildClient(0)
 	token := client.Subscribe("errors", 0, errorHandler)
-	token.Wait()
+	if !token.WaitTimeout(*timeout) {
+		log.Fatal("subscribing to errors channel: timeout")
+	}
 	if err := token.Error(); err != nil {
-		log.Fatal(err)
+		log.Fatal("subscribing to errors channel:", err)
 	}
 
 	var wg sync.WaitGroup
