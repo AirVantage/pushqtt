@@ -120,7 +120,7 @@ func main() {
 		expvar.Publish("errors-connection-other", cnxErrors)
 		expvar.Publish("errors-publish-timeout", publishTimeoutErrors)
 		expvar.Publish("errors-publish-other", publishErrors)
-		go log.Fatal(http.ListenAndServe(*expAddr, nil))
+		go http.ListenAndServe(*expAddr, nil)
 	}
 
 	// MQTT configuration
