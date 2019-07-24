@@ -1,3 +1,5 @@
 .vscode
 pushqtt
 t/
+dist/
+mkrelease.sh
