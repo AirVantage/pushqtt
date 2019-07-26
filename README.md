@@ -1,4 +1,5 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/AirVantage/pushqtt)](https://goreportcard.com/report/github.com/AirVantage/pushqtt)
+[![GitHub release](https://img.shields.io/github/release/AirVantage/pushqtt.svg)](https://github.com/AirVantage/pushqtt/releases/)
 
 PushQTT
 =======
